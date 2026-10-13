@@ -1,12 +1,21 @@
 """ROS 2 side of the K1 Webots controller.
-Publishes  /clock, /camera/image_raw (bgra8), /camera/camera_info
-Subscribes /cmd_vel (geometry_msgs/Twist: linear.x forward, linear.y left, angular.z turn)"""
+
+Publishes  /clock               simulation time (use_sim_time:=true in other nodes)
+           /camera/image_raw     head camera image (bgra8)
+           /camera/camera_info   camera intrinsics
+           /tf                  odom -> base_footprint (true pose from the Supervisor)
+                                base_footprint -> head_camera
+Subscribes /cmd_vel             geometry_msgs/Twist walking command
+                                 (linear.x forward, linear.y left, angular.z turn)
+"""
 import math
 
+import numpy as np
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import TransformStamped, Twist
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image
+from tf2_ros import TransformBroadcaster
 
 CMD_TIMEOUT = 0.5  # seconds without /cmd_vel before the robot stops
 
@@ -20,6 +29,10 @@ class RosBridge:
         self.clock_pub = self.node.create_publisher(Clock, "/clock", 10)
         self.image_pub = self.node.create_publisher(Image, "/camera/image_raw", 1)
         self.info_pub = self.node.create_publisher(CameraInfo, "/camera/camera_info", 1)
+        self.tf_pub = TransformBroadcaster(self.node)
+        self.body = robot.getSelf()
+        # getFromDevice wants the raw device tag in the R2025a Python API
+        self.camera_node = robot.getFromDevice(camera._tag)
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 1)
         self.cmd_vel = None
         self.cmd_vel_time = -1.0
@@ -69,9 +82,45 @@ class RosBridge:
         self.image_pub.publish(img)
         self.camera_info.header.stamp = stamp
         self.info_pub.publish(self.camera_info)
+        self._publish_tf(stamp)
+
+    def _publish_tf(self, stamp):
+        """base_footprint is the trunk projected on the ground, turned only by its yaw."""
+        trunk_rot = np.array(self.body.getOrientation()).reshape(3, 3)
+        yaw = math.atan2(trunk_rot[1, 0], trunk_rot[0, 0])
+        c, s = math.cos(yaw), math.sin(yaw)
+        footprint_rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+        footprint_pos = np.array(self.body.getPosition()) * [1, 1, 0]
+        cam_rot = np.array(self.camera_node.getOrientation()).reshape(3, 3)
+        cam_pos = np.array(self.camera_node.getPosition())
+        self.tf_pub.sendTransform([
+            _transform(stamp, "odom", "base_footprint", footprint_pos, footprint_rot),
+            _transform(stamp, "base_footprint", "head_camera",
+                       footprint_rot.T @ (cam_pos - footprint_pos), footprint_rot.T @ cam_rot),
+        ])
 
     def command(self):
         """Latest /cmd_vel as (vx, vy, vyaw), or None if nothing arrived recently."""
         if self.cmd_vel is None or self.robot.getTime() - self.cmd_vel_time > CMD_TIMEOUT:
             return None
         return self.cmd_vel
+
+
+def _transform(stamp, parent, child, pos, rot):
+    tf = TransformStamped()
+    tf.header.stamp = stamp
+    tf.header.frame_id = parent
+    tf.child_frame_id = child
+    tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, pos)
+    q = tf.transform.rotation
+    q.x, q.y, q.z, q.w = _quaternion(rot)
+    return tf
+
+
+def _quaternion(r):
+    """Rotation matrix to quaternion (x, y, z, w)."""
+    w = math.sqrt(max(0.0, 1 + r[0, 0] + r[1, 1] + r[2, 2])) / 2
+    x = math.copysign(math.sqrt(max(0.0, 1 + r[0, 0] - r[1, 1] - r[2, 2])) / 2, r[2, 1] - r[1, 2])
+    y = math.copysign(math.sqrt(max(0.0, 1 - r[0, 0] + r[1, 1] - r[2, 2])) / 2, r[0, 2] - r[2, 0])
+    z = math.copysign(math.sqrt(max(0.0, 1 - r[0, 0] - r[1, 1] + r[2, 2])) / 2, r[1, 0] - r[0, 1])
+    return x, y, z, w
