@@ -23,3 +23,31 @@ K1 {
   controller "k1_walk"
   supervisor TRUE
 }
+DEF BALL Solid {
+  translation 1.5 0 0.11
+  children [
+    DEF BALL_SHAPE Shape {
+      appearance PBRAppearance {
+        roughness 0.4
+        metalness 0
+        baseColorMap ImageTexture {
+          url [ "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/textures/football_base_color.jpg" ]
+        }
+      }
+      geometry Sphere {
+        radius 0.11
+        subdivision 3
+      }
+    }
+  ]
+  name "ball"
+  boundingObject USE BALL_SHAPE
+  physics Physics {
+    density -1
+    mass 0.45
+    damping Damping {
+      linear 0.3
+      angular 0.3
+    }
+  }
+}
