@@ -2,10 +2,23 @@
 
 Input:  ball position in the robot's base_footprint frame (x forward, y left), or None
 Output: walking command (vx, vy, vyaw)
+
+The K1 walking policy in Webots does not track slow commands: below about 0.2 m/s
+it stands still, and after a stop it keeps walking for about 0.7 m. So the robot
+does not stop in front of the ball. It lines the ball up with its right foot from
+a distance and walks through it (a walking kick), steering all the way.
 """
 import math
 
-SEARCH, APPROACH, ALIGN, READY = "SEARCH", "APPROACH", "ALIGN", "READY"
+SEARCH, APPROACH, TURN, KICK, DONE = "SEARCH", "APPROACH", "TURN", "KICK", "DONE"
+
+WALK_SPEED = 0.3      # m/s, forward speed while approaching
+KICK_SPEED = 0.3      # m/s, forward speed into the ball (faster trips the robot)
+TURN_SPEED = 0.4      # rad/s, turning on the spot (slower turns barely move)
+MAX_AIM_ERROR = 0.4   # rad, turn on the spot first if the ball is further off than this
+KICK_DISTANCE = 0.8   # m, start the kick run-up from here
+KICK_TIME = 4.0       # s, give up the run-up after this long
+CONTACT_X = 0.3       # m, stop walking once the ball is this close; coasting does the kick
 
 
 def clip(v, lo, hi):
@@ -13,15 +26,15 @@ def clip(v, lo, hi):
 
 
 class BallChaser:
-    def __init__(self, kick_x=0.30, kick_y=-0.07, lost_after=1.5, smoothing=0.3):
-        self.kick_x = kick_x          # where the ball should end up, ahead of the
-        self.kick_y = kick_y          # right foot (metres, base_footprint frame)
-        self.lost_after = lost_after  # seconds without a detection before searching
+    def __init__(self, foot_y=-0.07, lost_after=1.5, smoothing=0.3):
+        self.foot_y = foot_y          # the ball should pass this far left of the trunk
+        self.lost_after = lost_after  # seconds without a ball before searching
         self.smoothing = smoothing    # 0..1, weight of each new measurement
         self.state = SEARCH
         self.ball = None
         self.last_seen = -1e9
         self.search_dir = 1.0
+        self.kick_start = None
 
     def update(self, ball, now):
         if ball is not None:
@@ -33,33 +46,29 @@ class BallChaser:
                              self.ball[1] + a * (ball[1] - self.ball[1]))
             self.last_seen = now
             self.search_dir = 1.0 if self.ball[1] >= 0 else -1.0
+
+        if self.state == KICK:
+            if now - self.kick_start > KICK_TIME or (self.ball and self.ball[0] < CONTACT_X):
+                self.state = DONE
+                return 0.0, 0.0, 0.0
+            aim = math.atan2(self.ball[1] - self.foot_y, self.ball[0])
+            return KICK_SPEED, 0.0, clip(0.8 * aim, -0.2, 0.2)
+        if self.state == DONE:
+            return 0.0, 0.0, 0.0
+
         if now - self.last_seen > self.lost_after:
             self.state = SEARCH
-            return 0.0, 0.0, 0.5 * self.search_dir
+            return 0.0, 0.0, TURN_SPEED * self.search_dir
 
         x, y = self.ball
         dist = math.hypot(x, y)
-        bearing = math.atan2(y, x)
-        if self.state == SEARCH:
-            self.state = APPROACH
-        if self.state == APPROACH:
-            if dist < 0.6:
-                self.state = ALIGN
-            else:
-                vyaw = clip(1.2 * bearing, -0.5, 0.5)
-                vx = 0.0 if abs(bearing) > 0.5 else clip(0.5 * (dist - 0.4), 0.1, 0.4)
-                return vx, 0.0, vyaw
-        if self.state in (ALIGN, READY):
-            if dist > 0.8:
-                self.state = APPROACH
-                return 0.0, 0.0, 0.0
-            ex, ey = x - self.kick_x, y - self.kick_y
-            if abs(ex) < 0.05 and abs(ey) < 0.03:
-                self.state = READY
-                return 0.0, 0.0, 0.0
-            self.state = ALIGN
-            vx = clip(0.6 * ex, -0.15, 0.2)
-            vy = clip(1.0 * ey, -0.15, 0.15)
-            vyaw = clip(0.8 * bearing, -0.3, 0.3) if abs(ey) > 0.15 else 0.0
-            return vx, vy, vyaw
-        return 0.0, 0.0, 0.0
+        aim = math.atan2(y - self.foot_y, x)  # angle to put the ball in front of the right foot
+        if abs(aim) > MAX_AIM_ERROR or (self.state == TURN and abs(aim) > 0.1):
+            self.state = TURN
+            return 0.0, 0.0, math.copysign(TURN_SPEED, aim)
+        if dist < KICK_DISTANCE and abs(aim) < 0.15:
+            self.state = KICK
+            self.kick_start = now
+            return KICK_SPEED, 0.0, 0.0
+        self.state = APPROACH
+        return WALK_SPEED, 0.0, clip(1.0 * aim, -0.3, 0.3)

@@ -3,7 +3,10 @@
 Subscribes /ball/position   geometry_msgs/PointStamped (camera frame, from ball_detector)
 Publishes  /cmd_vel         geometry_msgs/Twist walking command
            /chaser/state    std_msgs/String  SEARCH, APPROACH, ALIGN or READY
-Uses TF base_footprint <- head_camera (published by the Webots controller).
+Uses TF odom <- base_footprint <- head_camera (published by the Webots controller).
+
+The ball is remembered in the odom frame, so the robot still knows where it is when
+it drops out of view right in front of the feet.
 """
 import numpy as np
 import rclpy
@@ -14,6 +17,8 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from k1_behavior.chaser_logic import BallChaser
+
+MEMORY = 10.0  # seconds a ball position stays usable after it was last seen
 
 
 def quat_to_matrix(q):
@@ -31,7 +36,8 @@ class BallChaserNode(Node):
         self.chaser = BallChaser()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.ball = None
+        self.ball_odom = None
+        self.ball_time = -1e9
         self.create_subscription(PointStamped, "/ball/position", self.on_ball, 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.state_pub = self.create_publisher(String, "/chaser/state", 10)
@@ -39,20 +45,30 @@ class BallChaserNode(Node):
         self.last_state = None
         self.get_logger().info("Ball chaser ready")
 
-    def on_ball(self, msg):
+    def transform(self, target, source, point):
+        """point (x, y, z) from frame source to frame target, or None if TF is missing."""
         try:
-            tf = self.tf_buffer.lookup_transform("base_footprint", msg.header.frame_id, Time())
+            tf = self.tf_buffer.lookup_transform(target, source, Time())
         except TransformException as e:
             self.get_logger().warn(f"No transform yet: {e}", throttle_duration_sec=2.0)
-            return
-        t, q = tf.transform.translation, tf.transform.rotation
-        p = quat_to_matrix(q) @ np.array([msg.point.x, msg.point.y, msg.point.z])
-        self.ball = (p[0] + t.x, p[1] + t.y)
+            return None
+        t = tf.transform.translation
+        return quat_to_matrix(tf.transform.rotation) @ np.array(point) + [t.x, t.y, t.z]
+
+    def on_ball(self, msg):
+        p = self.transform("odom", msg.header.frame_id, [msg.point.x, msg.point.y, msg.point.z])
+        if p is not None:
+            self.ball_odom = p
+            self.ball_time = self.get_clock().now().nanoseconds * 1e-9
 
     def on_timer(self):
         now = self.get_clock().now().nanoseconds * 1e-9
-        vx, vy, vyaw = self.chaser.update(self.ball, now)
-        self.ball = None
+        ball = None
+        if self.ball_odom is not None and now - self.ball_time < MEMORY:
+            p = self.transform("base_footprint", "odom", self.ball_odom)
+            if p is not None:
+                ball = (p[0], p[1])
+        vx, vy, vyaw = self.chaser.update(ball, now)
         cmd = Twist()
         cmd.linear.x, cmd.linear.y, cmd.angular.z = vx, vy, vyaw
         self.cmd_pub.publish(cmd)
