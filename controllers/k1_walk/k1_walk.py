@@ -58,6 +58,12 @@ keyboard = Keyboard()
 keyboard.enable(dt_ms)
 camera = robot.getDevice("head_camera")
 camera.enable(32)  # new image every 32 ms (~30 fps)
+try:
+    from ros_bridge import RosBridge
+    bridge = RosBridge(robot, camera)
+except ImportError:
+    print("ROS 2 not sourced, keyboard control only")
+    bridge = None
 
 policy_idx = np.array([JOINTS.index(n) for n in POLICY_JOINTS])
 arm_fix_idx = JOINTS.index(ARM_FIX_JOINT)
@@ -88,6 +94,7 @@ def base_state():
 
 def read_keyboard():
     vx = vy = vyaw = 0.0
+    pressed = False
     key = keyboard.getKey()
     while key != -1:
         if key == Keyboard.UP:
@@ -102,8 +109,9 @@ def read_keyboard():
             vy = MAX_VY
         elif key == ord("D"):
             vy = -MAX_VY
+        pressed = True
         key = keyboard.getKey()
-    set_command(vx, vy, vyaw)
+    return (vx, vy, vyaw) if pressed else None  # None = no key held
 
 
 def set_command(vx, vy, vyaw):
@@ -141,7 +149,12 @@ step = 0
 while robot.step(dt_ms) != -1:
     q, dq = read_joints()
     if step % decimation == 0:
-        read_keyboard()
+        wanted = read_keyboard()
+        if bridge is not None:
+            bridge.spin()
+            if wanted is None:
+                wanted = bridge.command()
+        set_command(*(wanted or (0.0, 0.0, 0.0)))
         gravity = policy_step(q, dq)
         if gravity[2] > -0.5:
             print("K1 fell over, stopping the policy")
@@ -149,4 +162,6 @@ while robot.step(dt_ms) != -1:
     torque = np.clip(KP * (target - q) - KD * dq, -TORQUE_LIMIT, TORQUE_LIMIT)
     for m, t in zip(motors, torque):
         m.setTorque(float(t))
+    if bridge is not None and step % (32 // dt_ms) == 0:
+        bridge.publish_camera()
     step += 1
