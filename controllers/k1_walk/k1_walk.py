@@ -56,6 +56,8 @@ for s in sensors:
     s.enable(dt_ms)
 keyboard = Keyboard()
 keyboard.enable(dt_ms)
+camera = robot.getDevice("head_camera")
+camera.enable(32)  # new image every 32 ms (~30 fps)
 
 policy_idx = np.array([JOINTS.index(n) for n in POLICY_JOINTS])
 arm_fix_idx = JOINTS.index(ARM_FIX_JOINT)

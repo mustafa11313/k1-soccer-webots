@@ -96,6 +96,13 @@ PROTO K1 [
               endPoint Solid {
                 translation 0.000000 0.000000 0.033000
                 children [
+                  Camera {
+                    translation 0.060138 0.0351 0.092774
+                    name "head_camera"
+                    fieldOfView 1.5
+                    width 640
+                    height 480
+                  }
                   Shape {
                     appearance DEF aahead_pitch_link_material PBRAppearance {
                       baseColor 0.752940 0.752940 0.752940
