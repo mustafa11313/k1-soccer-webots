@@ -1,8 +1,8 @@
-"""Ball chaser node: walks the K1 to the ball and stops with the ball in front of the right foot.
+"""Ball chaser node: finds the ball, walks to it and kicks it by walking through it.
 
 Subscribes /ball/position   geometry_msgs/PointStamped (camera frame, from ball_detector)
 Publishes  /cmd_vel         geometry_msgs/Twist walking command
-           /chaser/state    std_msgs/String  SEARCH, APPROACH, ALIGN or READY
+           /chaser/state    std_msgs/String  SEARCH, APPROACH, TURN, KICK or DONE
 Uses TF odom <- base_footprint <- head_camera (published by the Webots controller).
 
 The ball is remembered in the odom frame, so the robot still knows where it is when
@@ -18,6 +18,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from k1_behavior.chaser_logic import BallChaser
 
+BALL_RADIUS = 0.11  # m, height of the ball centre above the floor
 MEMORY = 10.0  # seconds a ball position stays usable after it was last seen
 
 
@@ -56,10 +57,20 @@ class BallChaserNode(Node):
         return quat_to_matrix(tf.transform.rotation) @ np.array(point) + [t.x, t.y, t.z]
 
     def on_ball(self, msg):
+        """Intersect the camera ray through the ball with the plane at ball-centre height.
+
+        This only uses the ball's direction in the image, which is much more accurate
+        than the distance the detector estimates from the box width.
+        """
+        camera = self.transform("odom", msg.header.frame_id, [0.0, 0.0, 0.0])
         p = self.transform("odom", msg.header.frame_id, [msg.point.x, msg.point.y, msg.point.z])
-        if p is not None:
-            self.ball_odom = p
-            self.ball_time = self.get_clock().now().nanoseconds * 1e-9
+        if camera is None or p is None:
+            return
+        ray = p - camera
+        if ray[2] > -1e-3:
+            return  # ball at or above the horizon, cannot intersect the floor
+        self.ball_odom = camera + ray * (BALL_RADIUS - camera[2]) / ray[2]
+        self.ball_time = self.get_clock().now().nanoseconds * 1e-9
 
     def on_timer(self):
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -69,6 +80,8 @@ class BallChaserNode(Node):
             if p is not None:
                 ball = (p[0], p[1])
         vx, vy, vyaw = self.chaser.update(ball, now)
+        if self.chaser.state == "DONE":
+            self.ball_odom = None  # the kick moved the ball, wait for a fresh detection
         cmd = Twist()
         cmd.linear.x, cmd.linear.y, cmd.angular.z = vx, vy, vyaw
         self.cmd_pub.publish(cmd)

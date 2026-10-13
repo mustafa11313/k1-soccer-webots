@@ -18,7 +18,9 @@ TURN_SPEED = 0.4      # rad/s, turning on the spot (slower turns barely move)
 MAX_AIM_ERROR = 0.4   # rad, turn on the spot first if the ball is further off than this
 KICK_DISTANCE = 0.8   # m, start the kick run-up from here
 KICK_TIME = 4.0       # s, give up the run-up after this long
-CONTACT_X = 0.3       # m, stop walking once the ball is this close; coasting does the kick
+REST_TIME = 3.0       # s, stand still after a kick, then look for the ball again
+CONTACT_X = 0.3       # m, the ball counts as reached once it is this close
+FOLLOW_THROUGH = 0.6  # s, keep walking after reaching the ball
 
 
 def clip(v, lo, hi):
@@ -35,6 +37,8 @@ class BallChaser:
         self.last_seen = -1e9
         self.search_dir = 1.0
         self.kick_start = None
+        self.contact_time = None
+        self.done_time = None
 
     def update(self, ball, now):
         if ball is not None:
@@ -48,13 +52,23 @@ class BallChaser:
             self.search_dir = 1.0 if self.ball[1] >= 0 else -1.0
 
         if self.state == KICK:
-            if now - self.kick_start > KICK_TIME or (self.ball and self.ball[0] < CONTACT_X):
-                self.state = DONE
+            if self.contact_time is None and self.ball[0] < CONTACT_X:
+                self.contact_time = now
+            if self.contact_time is not None:
+                if now - self.contact_time > FOLLOW_THROUGH:
+                    self.state, self.done_time = DONE, now
+                    return 0.0, 0.0, 0.0
+                return KICK_SPEED, 0.0, 0.0  # walk straight through the ball
+            if now - self.kick_start > KICK_TIME:
+                self.state, self.done_time = DONE, now
                 return 0.0, 0.0, 0.0
             aim = math.atan2(self.ball[1] - self.foot_y, self.ball[0])
             return KICK_SPEED, 0.0, clip(0.8 * aim, -0.2, 0.2)
         if self.state == DONE:
-            return 0.0, 0.0, 0.0
+            if now - self.done_time < REST_TIME:
+                return 0.0, 0.0, 0.0
+            # forget the old position, the ball has moved
+            self.state, self.ball, self.last_seen, self.contact_time = SEARCH, None, -1e9, None
 
         if now - self.last_seen > self.lost_after:
             self.state = SEARCH
