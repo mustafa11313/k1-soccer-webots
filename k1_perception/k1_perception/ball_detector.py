@@ -18,7 +18,7 @@ SPORTS_BALL = 32  # COCO class id of "sports ball"
 class BallDetector(Node):
     def __init__(self):
         super().__init__("ball_detector")
-        self.declare_parameter("model", "yolo11n.pt")
+        self.declare_parameter("model", "yolo11s.pt")
         self.declare_parameter("confidence", 0.25)
         self.declare_parameter("ball_diameter", 0.22)  # metres
         self.model = YOLO(self.get_parameter("model").value)
