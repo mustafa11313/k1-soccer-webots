@@ -33,7 +33,7 @@ POLICY_JOINTS = [  # order the network was trained with (no head)
 # Values from booster_deploy (K1WalkControllerCfg)
 DEFAULT_POS = np.array([0, 0, 0.2, -1.25, 0, -0.5, 0.2, 1.25, 0, 0.5,
                         -0.15, 0, 0, 0.3, -0.15, 0, -0.15, 0, 0, 0.3, -0.15, 0], dtype=np.float32)
-DEFAULT_POS[1] = 0.5  # head pitch: look down so the ball stays in view up close
+DEFAULT_POS[1] = 0.7  # head pitch: look down so the ball stays in view up close
 KP = np.array([4, 4, 20, 20, 20, 20, 20, 20, 20, 20,
                100, 100, 100, 100, 65, 65, 100, 100, 100, 100, 65, 65], dtype=np.float32)
 KD = np.array([1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
