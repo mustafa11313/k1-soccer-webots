@@ -3,6 +3,8 @@ Subscribes /camera/image_raw, /camera/camera_info
 Publishes  /ball/position     geometry_msgs/PointStamped, ball centre in the camera frame
                               (x forward, y left, z up), estimated from the known ball size
            /ball/debug_image  camera image with the detection drawn on it"""
+import os
+
 import cv2
 import numpy as np
 import rclpy
@@ -12,17 +14,19 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from ultralytics import YOLO
 
-SPORTS_BALL = 32  # COCO class id of "sports ball"
+OUR_MODEL = os.path.expanduser("~/k1_ws/runs/ball/weights/best.pt")
 
 
 class BallDetector(Node):
     def __init__(self):
         super().__init__("ball_detector")
-        self.declare_parameter("model", "yolo11s.pt")
+        self.declare_parameter("model", OUR_MODEL)
+        self.declare_parameter("ball_class", 0)  # 0 for our model, 32 (sports ball) for yolo11s.pt
         self.declare_parameter("confidence", 0.25)
         self.declare_parameter("ball_diameter", 0.22)  # metres
         self.model = YOLO(self.get_parameter("model").value)
         self.confidence = self.get_parameter("confidence").value
+        self.ball_class = self.get_parameter("ball_class").value
         self.ball_diameter = self.get_parameter("ball_diameter").value
         self.bridge = CvBridge()
         self.camera_matrix = None
@@ -39,7 +43,7 @@ class BallDetector(Node):
         if self.camera_matrix is None:
             return
         frame = cv2.cvtColor(self.bridge.imgmsg_to_cv2(msg), cv2.COLOR_BGRA2BGR)
-        result = self.model(frame, classes=[SPORTS_BALL], conf=self.confidence, device="cpu", verbose=False)[0]
+        result = self.model(frame, classes=[self.ball_class], conf=self.confidence, device="cpu", verbose=False)[0]
         if len(result.boxes) > 0:
             best = int(result.boxes.conf.argmax())
             x1, y1, x2, y2 = result.boxes.xyxy[best].tolist()
