@@ -7,10 +7,11 @@ from one_leg import OneLegStand
 
 KICK = {
     "wind_hip": 0.3, "wind_knee": 1.0, "wind_time": 0.5,     # rad (hip > 0: foot back), s
-    "swing_hip": -0.6, "swing_knee": 0.3, "swing_time": 0.15,
+    "swing_hip": -0.6, "swing_knee": 0.3, "swing_time": 0.2,
     "follow_time": 0.15,
-    "back_hip": -0.2, "back_knee": 0.6, "back_time": 0.4,
+    "back_hip": -0.1, "back_knee": 0.8, "back_time": 0.4,
     "down_time": 0.4,
+    "kp_pitch": 2.0, "kp_hip": 2.0,   # lean back harder: the swing tips the trunk forward
 }
 ANKLE_MIN = -0.7   # rad, ankle pitch offset limit (the joint stops at -0.87, standing is -0.15)
 
