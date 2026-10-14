@@ -1,0 +1,71 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/samples/contests/robocup/protos/RobocupSoccerField.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "../protos/K1.proto"
+
+WorldInfo {
+  basicTimeStep 2
+}
+Viewpoint {
+  orientation -0.2 0.2 0.96 1.6
+  position 0 -2.5 1.2
+  follow "K1"
+}
+TexturedBackground {}
+TexturedBackgroundLight {}
+K1 {
+  translation 1.5 0 0.56
+  controller "k1_walk"
+  supervisor TRUE
+}
+DEF BALL Solid {
+  translation 3 0 0.11
+  children [
+    DEF BALL_SHAPE Shape {
+      appearance PBRAppearance {
+        roughness 0.4
+        metalness 0
+        baseColorMap ImageTexture {
+          url [ "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/textures/football_base_color.jpg" ]
+        }
+      }
+      geometry Sphere {
+        radius 0.11
+        subdivision 3
+      }
+    }
+  ]
+  name "ball"
+  boundingObject USE BALL_SHAPE
+  physics Physics {
+    density -1
+    mass 0.45
+    damping Damping {
+      linear 0.3
+      angular 0.3
+    }
+  }
+}
+DEF FIELD RobocupSoccerField {
+  size "kid"
+  turfPhysics FALSE
+}
+DEF DRONE Robot {
+  translation -2.2 0 2
+  children [
+    Shape { appearance DEF DRONE_GREY PBRAppearance { baseColor 0.2 0.2 0.22 roughness 0.6 metalness 0 } geometry Box { size 0.25 0.18 0.07 } }
+    Pose { translation 0.15 0.15 0.03 children [ DEF ROTOR Shape { appearance PBRAppearance { baseColor 0.7 0.7 0.7 roughness 0.5 metalness 0 transparency 0.4 } geometry Cylinder { height 0.01 radius 0.09 } } ] }
+    Pose { translation 0.15 -0.15 0.03 children [ USE ROTOR ] }
+    Pose { translation -0.15 0.15 0.03 children [ USE ROTOR ] }
+    Pose { translation -0.15 -0.15 0.03 children [ USE ROTOR ] }
+    Pose { rotation 0 0 1 0.785 children [ Shape { appearance USE DRONE_GREY geometry Box { size 0.45 0.03 0.02 } } ] }
+    Pose { rotation 0 0 1 -0.785 children [ Shape { appearance USE DRONE_GREY geometry Box { size 0.45 0.03 0.02 } } ] }
+    Camera { translation 0.14 0 -0.04 name "drone_camera" width 640 height 360 fov 1.1 }
+    Speaker { name "speaker" }
+  ]
+  name "drone"
+  controller "drone_cam"
+  supervisor TRUE
+}
