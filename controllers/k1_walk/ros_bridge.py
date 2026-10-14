@@ -7,6 +7,7 @@ Publishes  /clock               simulation time (use_sim_time:=true in other nod
                                 base_footprint -> head_camera
 Subscribes /cmd_vel             geometry_msgs/Twist walking command
                                  (linear.x forward, linear.y left, angular.z turn)
+           /head/command        std_msgs/Float64MultiArray [yaw, pitch] head angles in rad
 """
 import math
 
@@ -15,6 +16,7 @@ import rclpy
 from geometry_msgs.msg import TransformStamped, Twist
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import Float64MultiArray
 from tf2_ros import TransformBroadcaster
 
 CMD_TIMEOUT = 0.5  # seconds without /cmd_vel before the robot stops
@@ -34,6 +36,9 @@ class RosBridge:
         # getFromDevice wants the raw device tag in the R2025a Python API
         self.camera_node = robot.getFromDevice(camera._tag)
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 1)
+        self.node.create_subscription(Float64MultiArray, "/head/command", self._on_head, 1)
+        self.head_cmd = None
+        self.head_time = -1.0
         self.cmd_vel = None
         self.cmd_vel_time = -1.0
         self.camera_info = self._make_camera_info()
@@ -55,6 +60,17 @@ class RosBridge:
     def _on_cmd_vel(self, msg):
         self.cmd_vel = (msg.linear.x, msg.linear.y, msg.angular.z)
         self.cmd_vel_time = self.robot.getTime()
+
+    def _on_head(self, msg):
+        if len(msg.data) == 2:
+            self.head_cmd = (msg.data[0], msg.data[1])
+            self.head_time = self.robot.getTime()
+
+    def head(self):
+        """Latest /head/command as (yaw, pitch), or None if nothing arrived recently."""
+        if self.head_cmd is None or self.robot.getTime() - self.head_time > CMD_TIMEOUT:
+            return None
+        return self.head_cmd
 
     def _stamp(self):
         t = self.robot.getTime()

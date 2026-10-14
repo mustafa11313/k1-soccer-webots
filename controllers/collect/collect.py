@@ -5,8 +5,11 @@ ball, the head, the lights, the floor colour and some distractor objects at rand
 Every camera image is saved with a YOLO label for the ball, computed from the ball's
 true position, so nothing has to be labelled by hand.
 
-controllerArgs: split name, number of images, random seed. Output goes to
+controllerArgs: split name, number of images, random seed, mode. Output goes to
 ~/k1_ws/data/ball/<split>/images and labels.
+Mode "normal" (default) puts the ball 0.35-5 m away. Mode "close" looks steeply down
+and to the side with the arms in random poses, with the ball at the feet or (35%)
+no ball at all, so the detector learns close balls and that its own body is no ball.
 """
 import math
 import os
@@ -98,6 +101,7 @@ last_action = np.zeros(len(POLICY_JOINTS), dtype=np.float32)
 obs_history = None
 target = DEFAULT_POS.copy()
 last_q = None
+arm_offset = np.zeros_like(DEFAULT_POS)  # extra arm pose in "close" mode, on top of the policy
 
 
 def read_joints():
@@ -145,11 +149,14 @@ def policy_step(q, dq):
 SPLIT = sys.argv[1] if len(sys.argv) > 1 else "train"
 COUNT = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
 random.seed(int(sys.argv[3]) if len(sys.argv) > 3 else 0)
+MODE = sys.argv[4] if len(sys.argv) > 4 else "normal"
+PREFIX = SPLIT if MODE == "normal" else f"{SPLIT}_{MODE}"  # new files never overwrite old ones
 OUT = os.path.join(os.path.expanduser("~/k1_ws/data/ball"), SPLIT)
 os.makedirs(os.path.join(OUT, "images"), exist_ok=True)
 os.makedirs(os.path.join(OUT, "labels"), exist_ok=True)
 
 BALL_RADIUS = 0.11
+VISIBLE_MIN = 0.1  # label the ball when at least this part of it is in the image
 CAMERA_PERIOD = 32  # ms
 camera = robot.getDevice("head_camera")
 camera.enable(CAMERA_PERIOD)
@@ -174,7 +181,19 @@ def random_floor_point(min_d, max_d, yaw, spread):
     return [p[0] + d * math.cos(heading), p[1] + d * math.sin(heading)]
 
 
-def randomize():
+def randomize_close():
+    head_yaw = random.uniform(-1.1, 1.1)
+    DEFAULT_POS[0] = head_yaw
+    DEFAULT_POS[1] = random.uniform(0.5, 0.95)
+    arm_offset[2:10] = [random.uniform(-0.3, 0.3) for _ in range(8)]
+    if random.random() < 0.35:  # only the robot's own arms and feet in view
+        x, y = random_floor_point(1.0, 4.0, head_yaw + math.pi, 0.5)
+    else:
+        x, y = random_floor_point(0.25, 0.8, head_yaw, 0.6)
+    return x, y, head_yaw
+
+
+def randomize_normal():
     head_yaw = random.uniform(-0.8, 0.8)
     DEFAULT_POS[0] = head_yaw
     DEFAULT_POS[1] = random.uniform(0.2, 0.79)
@@ -182,6 +201,11 @@ def randomize():
         x, y = random_floor_point(1.0, 4.0, head_yaw + math.pi, 0.5)
     else:
         x, y = random_floor_point(0.35, 5.0, head_yaw, 0.9)
+    return x, y, head_yaw
+
+
+def randomize():
+    x, y, head_yaw = randomize_close() if MODE == "close" else randomize_normal()
     ball.getField("translation").setSFVec3f([x, y, BALL_RADIUS])
     ball.getField("rotation").setSFRotation([random.uniform(-1, 1), random.uniform(-1, 1), 1, random.uniform(0, 6.28)])
     ball.resetPhysics()
@@ -209,7 +233,7 @@ def ball_box():
     if box[2] - box[0] < 4 or box[3] - box[1] < 4:
         return None
     visible = (box[2] - box[0]) * (box[3] - box[1]) / (2 * r) ** 2
-    return box if visible > 0.3 else None
+    return box if visible > VISIBLE_MIN else None
 
 
 saved = 0
@@ -223,7 +247,7 @@ while robot.step(dt_ms) != -1 and saved < COUNT:
         if gravity[2] > -0.5:
             print("K1 fell over, stopping")
             break
-    torque = np.clip(KP * (target - q) - KD * dq, -TORQUE_LIMIT, TORQUE_LIMIT)
+    torque = np.clip(KP * (target + arm_offset - q) - KD * dq, -TORQUE_LIMIT, TORQUE_LIMIT)
     for m, tq in zip(motors, torque):
         m.setTorque(float(tq))
     step += 1
@@ -232,7 +256,7 @@ while robot.step(dt_ms) != -1 and saved < COUNT:
         next_randomize = t + 0.3
         capture_at = t + 0.2  # give the head time to move and the camera to update
     if next_randomize > 1.0 and t >= capture_at and round(t * 1000) % CAMERA_PERIOD == 0:
-        name = f"{SPLIT}_{saved:05d}"
+        name = f"{PREFIX}_{saved:05d}"
         camera.saveImage(os.path.join(OUT, "images", name + ".jpg"), 90)
         box = ball_box()
         with open(os.path.join(OUT, "labels", name + ".txt"), "w") as f:

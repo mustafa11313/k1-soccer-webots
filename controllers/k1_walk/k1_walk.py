@@ -1,13 +1,22 @@
-"""K1 walking controller for Webots: runs Booster's k1_walk policy with PD torque control.
-Keyboard (click the 3D view first, hold the key): Up/Down = forward/back,
-Left/Right = turn, A/D = sidestep."""
+"""K1 walking controller for Webots.
+
+Runs Booster's trained K1 walking policy (k1_walk.pt from booster_deploy)
+and turns its output into joint torques with a PD controller, the same way
+Booster's MuJoCo deployment does.
+
+Velocity command: keyboard in the 3D view (click it first)
+  Up/Down = forward/back, Left/Right = turn, A/D = sidestep (hold the key)
+or, when Webots is started from a terminal with ROS 2 sourced, /cmd_vel
+(see ros_bridge.py). The keyboard wins while a key is held.
+"""
 import os
 
 import numpy as np
 import torch
 from controller import Keyboard, Supervisor
 
-JOINTS = [  # real K1 joint order
+# Joint order of the real K1 (same as the URDF and booster_deploy K1_CFG)
+JOINTS = [
     "aahead_yaw_joint", "aahead_pitch_joint",
     "aaleft_shoulder_pitch_joint", "left_shoulder_roll_joint",
     "left_elbow_pitch_joint", "left_elbow_yaw_joint",
@@ -18,7 +27,8 @@ JOINTS = [  # real K1 joint order
     "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
     "right_knee_pitch_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
 ]
-POLICY_JOINTS = [  # order the network was trained with (no head)
+# Joint order the policy was trained with (no head joints)
+POLICY_JOINTS = [
     "aaleft_shoulder_pitch_joint", "aaright_shoulder_pitch_joint",
     "left_hip_pitch_joint", "right_hip_pitch_joint",
     "left_shoulder_roll_joint", "right_shoulder_roll_joint",
@@ -30,22 +40,49 @@ POLICY_JOINTS = [  # order the network was trained with (no head)
     "left_ankle_pitch_joint", "right_ankle_pitch_joint",
     "left_ankle_roll_joint", "right_ankle_roll_joint",
 ]
-# Values from booster_deploy (K1WalkControllerCfg)
-DEFAULT_POS = np.array([0, 0, 0.2, -1.25, 0, -0.5, 0.2, 1.25, 0, 0.5,
-                        -0.15, 0, 0, 0.3, -0.15, 0, -0.15, 0, 0, 0.3, -0.15, 0], dtype=np.float32)
+# Values from booster_deploy tasks/locomotion/robots/k1 (K1WalkControllerCfg)
+DEFAULT_POS = np.array([
+    0, 0,
+    0.2, -1.25, 0, -0.5,
+    0.2, 1.25, 0, 0.5,
+    -0.15, 0, 0, 0.3, -0.15, 0,
+    -0.15, 0, 0, 0.3, -0.15, 0,
+], dtype=np.float32)
 DEFAULT_POS[1] = 0.7  # head pitch: look down so the ball stays in view up close
-KP = np.array([4, 4, 20, 20, 20, 20, 20, 20, 20, 20,
-               100, 100, 100, 100, 65, 65, 100, 100, 100, 100, 65, 65], dtype=np.float32)
-KD = np.array([1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
-               2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1], dtype=np.float32)
-TORQUE_LIMIT = np.array([6, 6, 14, 14, 14, 14, 14, 14, 14, 14,
-                         30, 20, 15, 35, 24, 15, 30, 20, 15, 35, 24, 15], dtype=np.float32)
-POLICY_DT = 0.02  # network runs at 50 Hz
-ACTION_SCALE, ACTION_FILTER, DOF_VEL_SCALE, HISTORY = 0.25, 0.8, 0.1, 10
-ARM_FIX_JOINT, ARM_FIX_OFFSET = "right_elbow_pitch_joint", 0.2
-# In Webots the K1 only stays reliably on its feet within these limits
+KP = np.array([
+    4, 4,
+    20, 20, 20, 20,
+    20, 20, 20, 20,
+    100, 100, 100, 100, 65, 65,
+    100, 100, 100, 100, 65, 65,
+], dtype=np.float32)
+KD = np.array([
+    1, 1,
+    2, 2, 2, 2,
+    2, 2, 2, 2,
+    2, 2, 2, 2, 1, 1,
+    2, 2, 2, 2, 1, 1,
+], dtype=np.float32)
+TORQUE_LIMIT = np.array([
+    6, 6,
+    14, 14, 14, 14,
+    14, 14, 14, 14,
+    30, 20, 15, 35, 24, 15,
+    30, 20, 15, 35, 24, 15,
+], dtype=np.float32)
+POLICY_DT = 0.02          # policy runs at 50 Hz
+ACTION_SCALE = 0.25
+ACTION_FILTER = 0.8
+DOF_VEL_SCALE = 0.1
+HISTORY = 10
+ARM_FIX_JOINT = "right_elbow_pitch_joint"
+ARM_FIX_OFFSET = 0.2
+# Speed limits and how fast commands may change. Booster's policy handles more in
+# MuJoCo, but in Webots it only stayed reliably on its feet within these limits.
 MAX_VX, MIN_VX, MAX_VY, MAX_VYAW = 0.5, -0.2, 0.15, 0.5
-COMMAND_RAMP = 0.5  # max command change per second
+COMMAND_RAMP = 0.5  # max change per second
+HEAD_LIMITS = ((-1.0, 1.0), (0.0, 0.79))  # yaw, pitch (rad) from the URDF joint limits
+HEAD_STEP = 0.06    # rad per policy step, how fast the head may move
 
 robot = Supervisor()
 dt_ms = int(robot.getBasicTimeStep())
@@ -94,6 +131,7 @@ def base_state():
 
 
 def read_keyboard():
+    """Return (vx, vy, vyaw) from the held arrow keys, or None if no key is held."""
     vx = vy = vyaw = 0.0
     pressed = False
     key = keyboard.getKey()
@@ -112,7 +150,7 @@ def read_keyboard():
             vy = -MAX_VY
         pressed = True
         key = keyboard.getKey()
-    return (vx, vy, vyaw) if pressed else None  # None = no key held
+    return (vx, vy, vyaw) if pressed else None
 
 
 def set_command(vx, vy, vyaw):
@@ -126,10 +164,14 @@ def set_command(vx, vy, vyaw):
 def policy_step(q, dq):
     global obs_history, target
     ang_vel, gravity = base_state()
-    obs = np.concatenate([ang_vel, gravity, command,
-                          (q - DEFAULT_POS)[policy_idx],
-                          dq[policy_idx] * DOF_VEL_SCALE,
-                          last_action]).astype(np.float32)
+    obs = np.concatenate([
+        ang_vel,
+        gravity,
+        command,
+        (q - DEFAULT_POS)[policy_idx],
+        dq[policy_idx] * DOF_VEL_SCALE,
+        last_action,
+    ]).astype(np.float32)
     if obs_history is None:
         obs_history = np.tile(obs, (HISTORY, 1))
     else:
@@ -147,6 +189,7 @@ def policy_step(q, dq):
 
 
 step = 0
+leaning = False
 while robot.step(dt_ms) != -1:
     q, dq = read_joints()
     if step % decimation == 0:
@@ -155,7 +198,19 @@ while robot.step(dt_ms) != -1:
             bridge.spin()
             if wanted is None:
                 wanted = bridge.command()
-        set_command(*(wanted or (0.0, 0.0, 0.0)))
+            head = bridge.head()
+            if head is not None:
+                # the head is not part of the walking policy: just move its targets
+                for i, (angle, (low, high)) in enumerate(zip(head, HEAD_LIMITS)):
+                    DEFAULT_POS[i] += float(np.clip(np.clip(angle, low, high) - DEFAULT_POS[i], -HEAD_STEP, HEAD_STEP))
+        # Lean guard: on long walks the policy speeds up and tips forward. Stand still
+        # until the trunk is upright again.
+        upright = -base_state()[1][2]  # 1.0 = straight up
+        if upright < 0.95:
+            leaning = True
+        elif upright > 0.985:
+            leaning = False
+        set_command(*((0.0, 0.0, 0.0) if leaning else (wanted or (0.0, 0.0, 0.0))))
         gravity = policy_step(q, dq)
         if gravity[2] > -0.5:
             print("K1 fell over, stopping the policy")

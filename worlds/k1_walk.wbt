@@ -51,3 +51,16 @@ DEF BALL Solid {
     }
   }
 }
+DEF GOAL Solid {
+  translation 4.5 0 0
+  children [
+    DEF LEFT_POST Pose { translation 0 1.05 0.4 children [ Shape { appearance DEF GOAL_WHITE PBRAppearance { baseColor 1 1 1 roughness 0.5 metalness 0 } geometry Cylinder { height 0.8 radius 0.05 } } ] }
+    DEF RIGHT_POST Pose { translation 0 -1.05 0.4 children [ Shape { appearance USE GOAL_WHITE geometry Cylinder { height 0.8 radius 0.05 } } ] }
+    DEF CROSSBAR Pose { translation 0 0 0.8 rotation 1 0 0 1.5708 children [ Shape { appearance USE GOAL_WHITE geometry Cylinder { height 2.2 radius 0.05 } } ] }
+    DEF BACK_NET Pose { translation 0.6 0 0.25 children [ Shape { appearance DEF NET PBRAppearance { baseColor 0.6 0.6 0.6 roughness 1 metalness 0 } geometry Box { size 0.02 2.1 0.5 } } ] }
+    DEF LEFT_NET Pose { translation 0.3 1.05 0.25 children [ Shape { appearance USE NET geometry Box { size 0.6 0.02 0.5 } } ] }
+    DEF RIGHT_NET Pose { translation 0.3 -1.05 0.25 children [ Shape { appearance USE NET geometry Box { size 0.6 0.02 0.5 } } ] }
+  ]
+  name "goal"
+  boundingObject Group { children [ USE LEFT_POST USE RIGHT_POST USE BACK_NET USE LEFT_NET USE RIGHT_NET ] }
+}
