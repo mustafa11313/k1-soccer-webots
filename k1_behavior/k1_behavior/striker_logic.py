@@ -1,0 +1,186 @@
+"""Goal scoring state machine, without any ROS code so it can be tested on its own.
+
+Input:  ball position and the two goal posts in the robot's base_footprint frame
+        (x forward, y left). The ball may be None when it is not known.
+        Posts are given as seen from the field: left post first.
+Output: walking command (vx, vy, vyaw)
+
+The walking kick only pushes the ball in the direction the robot walks, so the robot
+first walks to a point behind the ball on the line from the goal through the ball,
+then dribbles: it keeps walking through the ball towards the goal, steering so the
+ball keeps rolling goalwards, without stopping between touches. If it stands on the
+wrong side of the ball it walks around it in a wide arc first, since the walking
+policy cannot sidestep.
+"""
+import math
+
+from k1_behavior.chaser_logic import MAX_AIM_ERROR, SEARCH, TURN_SPEED, WALK_SPEED, clip
+
+AROUND, BEHIND, DRIBBLE, SCORED = "AROUND", "BEHIND", "DRIBBLE", "SCORED"
+
+RUN_UP = 0.8        # m behind the ball, on the goal line, where the run-up starts
+SIDE = 0.8          # m, sideways distance when walking around the ball
+BEHIND_LIMIT = 0.3  # m the robot must be behind the ball to go straight for the run-up point
+LINED_UP = 0.3      # rad, robot-ball direction vs ball-goal direction to start dribbling
+LINED_UP_EXIT = 0.9 # rad, stop dribbling and walk around when it gets worse than this
+DRIBBLE_REACH = 0.7 # m, a ball this close in front stays in the dribble even if the line is poor
+CLOSE = 0.6         # m, closer than this steer by the goal direction, not the ball direction
+AIM_GAIN = 0.8      # steer this much (per rad of misalignment) to the side that pushes the ball goalwards
+IN_GOAL = 0.3       # m behind the goal line (ball centre) before it counts, the estimate is a few cm off
+AIM_DEPTH = 0.6     # m behind the goal line, the point the ball is pushed towards
+POST_CLEARANCE = 0.5  # m, never walk forward into a goal post closer than this
+BRAKE_TIME = 1.0    # s standing still before turning on the spot (turning while walking trips the robot)
+MAX_STEER = 0.2     # rad/s, turning while walking (sharper curves speed the robot up and trip it)
+
+
+def _sub(a, b):
+    return a[0] - b[0], a[1] - b[1]
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1]
+
+
+def _unit(a):
+    n = math.hypot(*a)
+    return (a[0] / n, a[1] / n) if n > 1e-6 else (1.0, 0.0)
+
+
+def _angle(a, b):
+    return abs(math.atan2(a[0] * b[1] - a[1] * b[0], _dot(a, b)))
+
+
+class Striker:
+    def __init__(self, foot_y=-0.07, lost_after=1.5):
+        self.foot_y = foot_y
+        self.lost_after = lost_after  # s without a ball estimate before searching
+        self.state = SEARCH
+        self.ball = None
+        self.last_seen = -1e9
+        self.search_dir = 1.0
+        self.turning = False
+        self.turn_dir = 1.0
+        self.side = None
+        self.walking = False
+        self.brake_until = -1e9
+        self.fresh = True
+
+    def update(self, ball, left_post, right_post, now, fresh=True):
+        """ball comes from BallTracker: (x, y) in base_footprint, or None if unknown.
+
+        fresh: the ball was actually seen just now (not only predicted). A goal only
+        counts when the ball is seen in it.
+        """
+        self.fresh = fresh
+        cmd = self._update(ball, left_post, right_post, now)
+        for post in (left_post, right_post):
+            if cmd[0] > 0 and 0.0 < post[0] < POST_CLEARANCE and abs(post[1]) < 0.3:
+                # a goal post right ahead: turn away from it instead of walking into it
+                cmd = (0.0, 0.0, -TURN_SPEED if post[1] > 0 else TURN_SPEED)
+        if cmd[0] > 0:
+            self.walking = True
+        elif self.walking and cmd[2] != 0:
+            # was walking, now wants to turn on the spot: stand still for a moment first
+            self.walking = False
+            self.brake_until = now + BRAKE_TIME
+        if now < self.brake_until:
+            return 0.0, 0.0, 0.0
+        if cmd == (0.0, 0.0, 0.0):
+            self.walking = False
+        return cmd
+
+    def _update(self, ball, left_post, right_post, now):
+        if ball is not None:
+            self.ball = ball
+            self.last_seen = now
+            self.search_dir = 1.0 if ball[1] >= 0 else -1.0
+        if self.state == SCORED:
+            return 0.0, 0.0, 0.0
+        if now - self.last_seen > self.lost_after:
+            self.state = SEARCH
+            return 0.0, 0.0, TURN_SPEED * self.search_dir
+
+        ball = self.ball
+        centre = ((left_post[0] + right_post[0]) / 2, (left_post[1] + right_post[1]) / 2)
+        across = _sub(right_post, left_post)
+        into_goal = _unit((-across[1], across[0]))
+        if self.fresh and self._in_goal(ball, centre, across, into_goal):
+            self.state = SCORED
+            return 0.0, 0.0, 0.0
+
+        # aim at a point inside the goal, so a ball lying on the goal line is pushed in, not along it
+        aim_point = (centre[0] + AIM_DEPTH * into_goal[0], centre[1] + AIM_DEPTH * into_goal[1])
+        to_goal = _unit(_sub(aim_point, ball))        # direction the ball should go
+        robot = (-ball[0], -ball[1])                  # robot position relative to the ball
+        behind = -_dot(robot, to_goal)                # how far the robot is behind the ball
+        misalign = _angle(ball, to_goal)              # robot->ball vs ball->goal
+        dist = math.hypot(*ball)
+
+        if self.state == DRIBBLE:
+            # keep going while the ball is in front of the feet and roughly goalwards
+            # (right at the feet the robot->ball direction means little, so use the heading)
+            close_in_front = dist < DRIBBLE_REACH and ball[0] > -0.05 and abs(ball[1]) < 0.4
+            heading_error = _angle((1.0, 0.0), to_goal)
+            if (misalign < LINED_UP_EXIT and behind > 0.0) or (close_in_front and heading_error < LINED_UP_EXIT):
+                return self._dribble(ball, to_goal)
+        elif behind > BEHIND_LIMIT and misalign < LINED_UP:
+            return self._dribble(ball, to_goal)
+        # once walking around, only switch to the run-up when clearly behind (no flip-flop)
+        if behind > BEHIND_LIMIT + (0.2 if self.state == AROUND else 0.0):
+            self.state = BEHIND
+            target = (ball[0] - RUN_UP * to_goal[0], ball[1] - RUN_UP * to_goal[1])
+        else:
+            if self.state != AROUND or self.side is None:
+                # pick the side the robot is on once, so it does not flip-flop when straight in front
+                self.side = 1.0 if (to_goal[0] * robot[1] - to_goal[1] * robot[0]) >= 0 else -1.0
+            self.state = AROUND
+            side = self.side
+            perp = (-to_goal[1] * side, to_goal[0] * side)
+            target = (ball[0] + SIDE * perp[0] - 0.4 * to_goal[0],
+                      ball[1] + SIDE * perp[1] - 0.4 * to_goal[1])
+        return self._walk_to(target)
+
+    def _in_goal(self, ball, centre, across, into_goal):
+        rel = _sub(ball, centre)
+        half_width = math.hypot(*across) / 2
+        lateral = abs(_dot(rel, _unit(across)))
+        return _dot(rel, into_goal) > IN_GOAL and lateral < half_width
+
+    def _walk_to(self, target):
+        aim = math.atan2(target[1], target[0])
+        return self._steer(aim)
+
+    def _steer(self, aim):
+        """Turn on the spot if the target is far off to the side, else walk and steer."""
+        if abs(aim) > MAX_AIM_ERROR or (self.turning and abs(aim) > 0.1):
+            if not self.turning or abs(aim) < 2.5:
+                # keep the turn direction when the target is nearly straight behind
+                self.turn_dir = math.copysign(1.0, aim)
+            self.turning = True
+            return 0.0, 0.0, TURN_SPEED * self.turn_dir
+        self.turning = False
+        return WALK_SPEED, 0.0, clip(1.0 * aim, -MAX_STEER, MAX_STEER)
+
+    def _dribble(self, ball, to_goal):
+        """Walk through the ball without stopping, steering so it rolls towards the goal.
+
+        From further away, aim at the ball, a little to the side away from the goal, so
+        the foot hits it off-centre and it rolls goalwards. Right at the ball its
+        direction jumps around with every step, so there steer by the goal direction
+        and only gently keep the ball in front of the foot.
+        """
+        self.state = DRIBBLE
+        dist = math.hypot(*ball)
+        goal_heading = math.atan2(to_goal[1], to_goal[0])   # ball->goal, in the robot frame
+        if dist < CLOSE:
+            lateral = math.atan2(ball[1] - self.foot_y, max(ball[0], 0.4))
+            aim = 0.5 * goal_heading + lateral
+        else:
+            ball_dir = math.atan2(ball[1] - self.foot_y, ball[0])
+            error = goal_heading - math.atan2(ball[1], ball[0])
+            error = math.atan2(math.sin(error), math.cos(error))
+            aim = ball_dir - clip(AIM_GAIN * error, -0.3, 0.3)
+        if (dist > DRIBBLE_REACH or self.turning) and (abs(aim) > MAX_AIM_ERROR or (self.turning and abs(aim) > 0.1)):
+            return self._steer(aim)  # far away: turn on the spot first (and finish a turn once started)
+        self.turning = False
+        return WALK_SPEED, 0.0, clip(1.0 * aim, -MAX_STEER, MAX_STEER)

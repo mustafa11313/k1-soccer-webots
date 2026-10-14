@@ -32,8 +32,8 @@ def quat_to_matrix(q):
 
 
 class BallChaserNode(Node):
-    def __init__(self):
-        super().__init__("ball_chaser")
+    def __init__(self, name="ball_chaser"):
+        super().__init__(name)
         self.chaser = BallChaser()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)

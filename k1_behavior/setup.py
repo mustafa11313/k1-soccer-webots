@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ball_chaser = k1_behavior.ball_chaser:main',
+            'striker = k1_behavior.striker:main',
         ],
     },
 )
