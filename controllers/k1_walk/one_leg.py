@@ -106,6 +106,11 @@ class OneLegStand:
     def done(self, t):
         return t >= self.duration
 
+    def free_leg(self, phase, smooth):
+        """Right hip, knee and ankle pitch offsets: lift the foot straight up, sole level."""
+        a = self.p["lift"] * {"lift": smooth, "hold": 1.0, "down": 1 - smooth}.get(phase, 0.0)
+        return -a, 2 * a, -a
+
     def target(self, t, q, gravity, ang_vel):
         """Joint targets at time t (s since the start)."""
         p, ix = self.p, self.ix
@@ -114,7 +119,6 @@ class OneLegStand:
         phase, a = self._phase(t)
         smooth = 0.5 - 0.5 * math.cos(math.pi * a)
         shift_amt = smooth if phase == "shift" else 1.0
-        lift_amt = {"lift": smooth, "hold": 1.0, "down": 1 - smooth}.get(phase, 0.0)
         one_leg = phase != "shift"
 
         # sideways trunk position over the left sole
@@ -136,10 +140,10 @@ class OneLegStand:
         pose[ix["left_ankle_roll_joint"]] += base + both + (corr if one_leg else 0.0)
         pose[ix["right_ankle_roll_joint"]] += base + both
 
-        a_ = p["lift"] * lift_amt
-        pose[ix["right_hip_pitch_joint"]] -= a_
-        pose[ix["right_knee_pitch_joint"]] += 2 * a_
-        pose[ix["right_ankle_pitch_joint"]] -= a_
+        hip, knee, ankle = self.free_leg(phase, smooth)
+        pose[ix["right_hip_pitch_joint"]] += hip
+        pose[ix["right_knee_pitch_joint"]] += knee
+        pose[ix["right_ankle_pitch_joint"]] += ankle
 
         pitch = math.atan2(gravity[0], -gravity[2])  # > 0: tilted forward
         roll = math.atan2(gravity[1], -gravity[2])   # > 0: tilted left

@@ -15,6 +15,7 @@ import numpy as np
 import torch
 from controller import Keyboard, Supervisor
 
+from kick import Kick
 from one_leg import LEG_GAIN, LEG_TORQUE_LIMIT, OneLegStand
 
 # Joint order of the real K1 (same as the URDF and booster_deploy K1_CFG)
@@ -132,6 +133,23 @@ def base_state():
     return rot.T @ ang_vel_w, rot.T @ np.array([0, 0, -1], dtype=np.float32)
 
 
+def put_ball():
+    """P key: put the ball where the kick hits it (22 cm ahead, 9 cm right of the trunk)."""
+    root = robot.getRoot().getField("children")
+    for i in range(root.getCount()):
+        node = root.getMFNode(i)
+        if "ball" in (node.getDef() + node.getTypeName()).lower():
+            break
+    else:
+        print("No ball found in the world"); return
+    p, r = body.getPosition(), body.getOrientation()
+    x, y = 0.22, -0.09
+    z = node.getPosition()[2]
+    node.getField("translation").setSFVec3f([p[0] + r[0] * x + r[1] * y, p[1] + r[3] * x + r[4] * y, z])
+    node.resetPhysics()
+    print("Ball put in front of the right foot, now press K")
+
+
 def read_keyboard():
     """Return (vx, vy, vyaw) from the held arrow keys, or None if no key is held."""
     vx = vy = vyaw = 0.0
@@ -154,6 +172,12 @@ def read_keyboard():
             if not balance_request[0]:
                 print("B pressed: waiting until the robot stands calmly")
             balance_request[0] = True
+        elif key == ord("K"):
+            if not balance_request[0]:
+                print("K pressed: waiting until the robot stands calmly, then kicking")
+            balance_request[0] = "kick"
+        elif key == ord("P"):
+            put_ball()
         pressed = True
         key = keyboard.getKey()
     return (vx, vy, vyaw) if pressed else None
@@ -247,9 +271,10 @@ while robot.step(dt_ms) != -1:
             balance_request[0] = False
             print("Stop walking first, then press B")
         elif balance_request[0] and still_time >= 2.0:  # stood calmly for 2 s
+            motion = Kick if balance_request[0] == "kick" else OneLegStand
             balance_request[0] = False
-            print("Standing on the left leg")
-            balance = OneLegStand(JOINTS, DEFAULT_POS, target)
+            print("Kicking with the right foot" if motion is Kick else "Standing on the left leg")
+            balance = motion(JOINTS, DEFAULT_POS, target)
             balance_start = robot.getTime()
         gravity = policy_step(q, dq)
         if gravity[2] > -0.5:
