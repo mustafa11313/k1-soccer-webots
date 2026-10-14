@@ -69,7 +69,15 @@ class BallChaserNode(Node):
         ray = p - camera
         if ray[2] > -1e-3:
             return  # ball at or above the horizon, cannot intersect the floor
-        self.ball_odom = camera + ray * (BALL_RADIUS - camera[2]) / ray[2]
+        ball = camera + ray * (BALL_RADIUS - camera[2]) / ray[2]
+        # the detector's distance comes from the box size: for a real ball on the floor it is
+        # close to the distance along the ray, for a piece of goal net it is far off
+        ratio = float(np.linalg.norm(ray) / np.linalg.norm(ball - camera))
+        if not 0.5 < ratio < 2.0:
+            self.get_logger().info(f"Ignored a detection that is not a ball on the floor (size ratio {ratio:.1f})",
+                                   throttle_duration_sec=2.0)
+            return
+        self.ball_odom = ball
         self.ball_time = self.get_clock().now().nanoseconds * 1e-9
 
     def on_timer(self):

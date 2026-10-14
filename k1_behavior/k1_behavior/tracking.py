@@ -14,7 +14,7 @@ ball is lost. The camera pose in TF follows the head, so detections stay correct
 import math
 
 JUMP = 1.0          # m, a detection this far from a well tracked ball is suspicious
-JUMP_CONFIRM = 3    # detections at the same new place before believing them
+JUMP_CONFIRM = 6    # detections at the same new place before believing them
 SELF_X = 0.12       # m, detections not at least this far in front of the trunk are the robot itself
 SMOOTHING = 0.5     # 0..1, weight of each new detection
 FRICTION = 1.0      # 1/s, how fast an unseen ball slows down

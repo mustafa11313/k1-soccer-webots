@@ -16,7 +16,7 @@ import math
 
 import rclpy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Empty, Float64MultiArray, String
 
 from k1_behavior.ball_chaser import BallChaserNode
 from k1_behavior.striker_logic import SCORED, Striker
@@ -33,6 +33,7 @@ class StrikerNode(BallChaserNode):
         self.declare_parameter("right_post", [4.5, -1.05])
         self.posts = [list(self.get_parameter(name).value) + [0.0] for name in ("left_post", "right_post")]
         self.head_pub = self.create_publisher(Float64MultiArray, "/head/command", 10)
+        self.kick_pub = self.create_publisher(Empty, "/kick", 10)
         self.get_logger().info("Striker ready")
 
     def on_ball(self, msg):
@@ -59,6 +60,8 @@ class StrikerNode(BallChaserNode):
         ball = self.tracker.update(pose, now)
         vx, vy, vyaw = self.chaser.update(ball, tuple(posts[0][:2]), tuple(posts[1][:2]), now,
                                             fresh=self.tracker.age(now) < 0.3)
+        if self.chaser.take_kick():
+            self.kick_pub.publish(Empty())  # k1_walk.py kicks once it stands calmly
         cmd = Twist()
         cmd.linear.x, cmd.linear.y, cmd.angular.z = vx, vy, vyaw
         self.cmd_pub.publish(cmd)
