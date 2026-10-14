@@ -15,6 +15,8 @@ import numpy as np
 import torch
 from controller import Keyboard, Supervisor
 
+from one_leg import LEG_GAIN, LEG_TORQUE_LIMIT, OneLegStand
+
 # Joint order of the real K1 (same as the URDF and booster_deploy K1_CFG)
 JOINTS = [
     "aahead_yaw_joint", "aahead_pitch_joint",
@@ -148,6 +150,10 @@ def read_keyboard():
             vy = MAX_VY
         elif key == ord("D"):
             vy = -MAX_VY
+        elif key == ord("B"):
+            if not balance_request[0]:
+                print("B pressed: waiting until the robot stands calmly")
+            balance_request[0] = True
         pressed = True
         key = keyboard.getKey()
     return (vx, vy, vyaw) if pressed else None
@@ -190,9 +196,29 @@ def policy_step(q, dq):
 
 step = 0
 leaning = False
+balance_request = [False]  # B pressed: stand on the left leg (one_leg.py)
+balance = None
+still_time = 0.0           # s the robot has been standing still
+KP_BALANCE = KP.copy()
+KP_BALANCE[10:] *= LEG_GAIN
+TORQUE_LIMIT_BALANCE = TORQUE_LIMIT.copy()
+TORQUE_LIMIT_BALANCE[10:] = np.tile(np.array(LEG_TORQUE_LIMIT, dtype=np.float32), 2)
 while robot.step(dt_ms) != -1:
     q, dq = read_joints()
-    if step % decimation == 0:
+    if balance is not None:
+        ang_vel, gravity = base_state()
+        bt = robot.getTime() - balance_start
+        target = balance.target(bt, q, gravity, ang_vel)
+        if gravity[2] > -0.5:
+            print("K1 fell over, stopping the policy")
+            break
+        if balance.done(bt):
+            print("One-leg stand done, walking policy takes over")
+            balance = None
+            obs_history = None
+            last_action[:] = 0
+            still_time = 0.0
+    elif step % decimation == 0:
         wanted = read_keyboard()
         if bridge is not None:
             bridge.spin()
@@ -211,11 +237,26 @@ while robot.step(dt_ms) != -1:
         elif upright > 0.985:
             leaning = False
         set_command(*((0.0, 0.0, 0.0) if leaning else (wanted or (0.0, 0.0, 0.0))))
+        # calm = not walking and the trunk upright and not rocking (after a fast walk it rocks for a while)
+        av, gv = base_state()
+        calm = np.abs(command).max() < 0.01 and not leaning and np.abs(av[:2]).max() < 0.3 and np.abs(gv[:2]).max() < 0.1
+        if balance_request[0] and not calm and step % (1000 // dt_ms) == 0:
+            print("waiting: command %s  rocking %.2f (needs < 0.3)  turning %.2f  tilt %.2f (needs < 0.1)" % (np.round(command, 2), np.abs(av[:2]).max(), av[2], np.abs(gv[:2]).max()))
+        still_time = still_time + POLICY_DT if calm else 0.0
+        if balance_request[0] and wanted is not None and any(wanted):
+            balance_request[0] = False
+            print("Stop walking first, then press B")
+        elif balance_request[0] and still_time >= 2.0:  # stood calmly for 2 s
+            balance_request[0] = False
+            print("Standing on the left leg")
+            balance = OneLegStand(JOINTS, DEFAULT_POS, target)
+            balance_start = robot.getTime()
         gravity = policy_step(q, dq)
         if gravity[2] > -0.5:
             print("K1 fell over, stopping the policy")
             break
-    torque = np.clip(KP * (target - q) - KD * dq, -TORQUE_LIMIT, TORQUE_LIMIT)
+    limit = TORQUE_LIMIT if balance is None else TORQUE_LIMIT_BALANCE
+    torque = np.clip((KP if balance is None else KP_BALANCE) * (target - q) - KD * dq, -limit, limit)
     for m, t in zip(motors, torque):
         m.setTorque(float(t))
     if bridge is not None and step % (32 // dt_ms) == 0:
