@@ -8,6 +8,7 @@ Publishes  /clock               simulation time (use_sim_time:=true in other nod
 Subscribes /cmd_vel             geometry_msgs/Twist walking command
                                  (linear.x forward, linear.y left, angular.z turn)
            /head/command        std_msgs/Float64MultiArray [yaw, pitch] head angles in rad
+           /kick                std_msgs/Empty kick with the right foot (kick.py)
 """
 import math
 
@@ -16,7 +17,7 @@ import rclpy
 from geometry_msgs.msg import TransformStamped, Twist
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Empty, Float64MultiArray
 from tf2_ros import TransformBroadcaster
 
 CMD_TIMEOUT = 0.5  # seconds without /cmd_vel before the robot stops
@@ -37,6 +38,8 @@ class RosBridge:
         self.camera_node = robot.getFromDevice(camera._tag)
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 1)
         self.node.create_subscription(Float64MultiArray, "/head/command", self._on_head, 1)
+        self.node.create_subscription(Empty, "/kick", self._on_kick, 1)
+        self.kick = False
         self.head_cmd = None
         self.head_time = -1.0
         self.cmd_vel = None
@@ -65,6 +68,14 @@ class RosBridge:
         if len(msg.data) == 2:
             self.head_cmd = (msg.data[0], msg.data[1])
             self.head_time = self.robot.getTime()
+
+    def _on_kick(self, msg):
+        self.kick = True
+
+    def take_kick(self):
+        """True once after a /kick message."""
+        kick, self.kick = self.kick, False
+        return kick
 
     def head(self):
         """Latest /head/command as (yaw, pitch), or None if nothing arrived recently."""

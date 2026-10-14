@@ -230,6 +230,8 @@ TORQUE_LIMIT_BALANCE[10:] = np.tile(np.array(LEG_TORQUE_LIMIT, dtype=np.float32)
 while robot.step(dt_ms) != -1:
     q, dq = read_joints()
     if balance is not None:
+        if bridge is not None and step % decimation == 0:
+            bridge.spin()  # keep the clock going during the motion
         ang_vel, gravity = base_state()
         bt = robot.getTime() - balance_start
         target = balance.target(bt, q, gravity, ang_vel)
@@ -246,6 +248,9 @@ while robot.step(dt_ms) != -1:
         wanted = read_keyboard()
         if bridge is not None:
             bridge.spin()
+            if bridge.take_kick() and not balance_request[0]:
+                print("The striker asks for a kick: waiting until the robot stands calmly")
+                balance_request[0] = "kick"
             if wanted is None:
                 wanted = bridge.command()
             head = bridge.head()
