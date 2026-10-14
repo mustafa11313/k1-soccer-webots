@@ -14,7 +14,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from ultralytics import YOLO
 
-OUR_MODEL = os.path.expanduser("~/k1_ws/src/models/ball_yolo11n_v2.pt")
+OUR_MODEL = os.path.expanduser("~/k1_ws/src/models/ball_yolo11n_v3.pt")
 
 
 class BallDetector(Node):
