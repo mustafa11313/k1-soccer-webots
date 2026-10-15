@@ -1,0 +1,17 @@
+# colcon
+build/
+install/
+log/
+# training data and runs (recreated by the collector and yolo)
+data/
+runs/
+# Python and editors
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+# backups made while patching
+*.bak
+# other downloads (only booster_assets is part of the repository, as a submodule)
+/third_party/*
+!/third_party/booster_assets

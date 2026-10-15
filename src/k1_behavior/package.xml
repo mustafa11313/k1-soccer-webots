@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="mustafaalmohammad123@gmail.com">shk</maintainer>
-  <license>TODO: License declaration</license>
+  <license>AGPL-3.0-or-later</license>
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>

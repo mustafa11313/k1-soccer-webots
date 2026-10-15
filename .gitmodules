@@ -1,0 +1,4 @@
+[submodule "third_party/booster_assets"]
+	path = third_party/booster_assets
+	url = https://github.com/BoosterRobotics/booster_assets.git
+	ignore = dirty

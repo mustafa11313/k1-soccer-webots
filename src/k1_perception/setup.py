@@ -16,7 +16,7 @@ setup(
     maintainer='shk',
     maintainer_email='mustafaalmohammad123@gmail.com',
     description='TODO: Package description',
-    license='TODO: License declaration',
+    license='AGPL-3.0-or-later',
     extras_require={
         'test': [
             'pytest',
