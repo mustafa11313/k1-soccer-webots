@@ -4,6 +4,10 @@ A Booster K1 humanoid that plays soccer by itself in the Webots simulator. It fi
 ball with its head camera, walks to it, dribbles it towards the goal and, when it is close
 enough, stops, lines up and shoots with a scripted kick.
 
+[![K1 demo: finding the ball, dribbling and scoring](docs/media/demo.gif)](docs/media/demo.mp4)
+
+*A full game in Webots, sped up 4x. Click for the MP4.*
+
 ## Features
 
 - **Walking** with Booster's learned K1 walking policy, run inside the Webots controller.
