@@ -12,11 +12,12 @@ ball keeps rolling goalwards, without stopping between touches. If it stands on 
 wrong side of the ball it walks around it in a wide arc first, since the walking
 policy cannot sidestep.
 
-Close to the goal it shoots instead: it stops short of the ball, stands still, nudges
-itself forward or back with short walking pulses until the ball is in front of the right
-foot, and asks the walking controller for a kick (take_kick()), which sends the ball about
-2.3 m. If the walk-up did not line it up, it keeps dribbling: a turn on the spot leaves
-the feet uneven, and the kick then misses or falls.
+Close to the goal it shoots instead: it stops short of the ball, stands still, turns
+and nudges itself forward or back with short walking pulses until the ball is in front of
+the right foot and the kick points into the goal, and asks the walking controller for a
+kick (take_kick()), which sends the ball 3-4 m. After a turn it always takes a few steps
+straight before kicking: a turn on the spot leaves the feet staggered and the kick falls.
+If no turn brings the kick inside the goal, it keeps dribbling.
 """
 import math
 
@@ -33,6 +34,7 @@ LINED_UP_EXIT = 0.9 # rad, stop dribbling and walk around when it gets worse tha
 DRIBBLE_REACH = 0.7 # m, a ball this close in front stays in the dribble even if the line is poor
 CLOSE = 0.6         # m, closer than this steer by the goal direction, not the ball direction
 AIM_GAIN = 0.8      # steer this much (per rad of misalignment) to the side that pushes the ball goalwards
+GOAL_CONFIRM = 1.0  # s the ball must be seen in the goal (a false detection in the net is not a goal)
 IN_GOAL = 0.3       # m behind the goal line (ball centre) before it counts, the estimate is a few cm off
 AIM_DEPTH = 0.6     # m behind the goal line, the point the ball is pushed towards
 POST_CLEARANCE = 0.5  # m, never walk forward into a goal post closer than this
@@ -40,19 +42,20 @@ BRAKE_TIME = 1.0    # s standing still before turning on the spot (turning while
 MAX_STEER = 0.2     # rad/s, turning while walking (sharper curves speed the robot up and trip it)
 
 # Kick (kick.py in the walking controller, right foot)
-KICK_RANGE = 1.8    # m, shoot when the ball is at most this far from the goal line
-KICK_X = (0.18, 0.35)    # m, ball centre in front of the trunk for the kick to hit it ...
-KICK_Y = (-0.15, 0.0)    # ... and to the side (right foot)
+KICK_RANGE = 2.5    # m, shoot when the ball is at most this far from the goal line
+KICK_X = (0.21, 0.38)    # m, ball centre in front of the trunk for the kick to hit it ...
+KICK_Y = (-0.13, 0.01)   # ... and to the side (right foot)
 KICK_AIM_Y = -0.05       # m, walk up so the ball ends up here
 # The ball leaves at an angle that depends on where the foot hits it: straight ahead for
-# a ball 3 cm right of the trunk, about 17 deg to the right for 9 cm (measured in Webots)
-STRAIGHT_Y, ANGLE_PER_M = -0.03, 5.0
+# a ball 3 cm right of the trunk, more to the right the further right it is (about 3.8 rad
+# per m, measured in Webots: +10 deg for y 0, -7 deg for y -0.05, -24 deg for y -0.13)
+STRAIGHT_Y, ANGLE_PER_M = -0.03, 3.8
 POST_MARGIN = 0.15       # rad, the kick direction must pass this far inside each post
 STOP_DIST = 1.2     # m, stop walking at this distance (the robot coasts on about 0.6 m)
 SETTLE_TIME = 3.0   # s, stand still after walking before measuring the ball
 NUDGE_REST = 2.5    # s, stand still after each nudge
 MAX_NUDGES = 12
-KICK_WAIT = 8.0     # s, the controller waits until it stands calmly (2 s), the kick takes 2.6 s
+KICK_WAIT = 8.0     # s, the controller waits until it stands calmly (2 s), the kick takes 3.3 s
 NO_KICK_TIME = 15.0 # s, after a failed line-up just dribble for a while
 # Nudges, measured in Webots: (vx, vyaw, seconds) -> about how far it moves
 FWD_SMALL = (0.3, 0.0, 1.25)   # 1-2 cm
@@ -60,6 +63,10 @@ FWD_MEDIUM = (0.3, 0.0, 1.5)   # 4-6 cm
 FWD_LARGE = (0.3, 0.0, 1.75)   # 10-14 cm
 FWD_XL = (0.3, 0.0, 2.25)      # about 25 cm
 BACK = (-0.2, 0.0, 2.5)        # about 3 cm back
+TURN = 0.23                    # rad, a turn nudge: vyaw 0.5 for 0.75 s turns 11-18 deg
+TURN_LEFT = (0.0, 0.5, 0.75)
+TURN_RIGHT = (0.0, -0.5, 0.75)
+MAX_TURNS = 3
 
 
 def _sub(a, b):
@@ -99,7 +106,11 @@ class Striker:
         self.nudge = None
         self.nudge_until = None
         self.nudges = 0
+        self.turns = 0
+        self.turned = False
         self.no_kick_until = -1e9
+        self.in_goal_since = None
+        self.note = ""  # why it kicked or gave up, for the log
 
     def take_kick(self):
         """True once when the walking controller should kick."""
@@ -153,9 +164,14 @@ class Striker:
         centre = ((left_post[0] + right_post[0]) / 2, (left_post[1] + right_post[1]) / 2)
         across = _sub(right_post, left_post)
         into_goal = _unit((-across[1], across[0]))
-        if self.fresh and self._in_goal(ball, centre, across, into_goal):
-            self.state = SCORED
-            return 0.0, 0.0, 0.0
+        if self._in_goal(ball, centre, across, into_goal):
+            if self.fresh and self.in_goal_since is None:
+                self.in_goal_since = now
+            if self.in_goal_since is not None and now - self.in_goal_since >= GOAL_CONFIRM:
+                self.state = SCORED
+                return 0.0, 0.0, 0.0
+        else:
+            self.in_goal_since = None
 
         # aim at a point inside the goal, so a ball lying on the goal line is pushed in, not along it
         aim_point = (centre[0] + AIM_DEPTH * into_goal[0], centre[1] + AIM_DEPTH * into_goal[1])
@@ -245,7 +261,8 @@ class Striker:
         dist = math.hypot(*ball)
         aim = math.atan2(ball[1] - KICK_AIM_Y, ball[0])
         if dist < STOP_DIST and abs(aim) < 0.3 and not self.turning:
-            self.state, self.settle_until, self.nudges = SETTLE, now + SETTLE_TIME, 0
+            self.state, self.settle_until, self.nudges, self.turns = SETTLE, now + SETTLE_TIME, 0, 0
+            self.turned = False
             return 0.0, 0.0, 0.0
         return self._steer(aim)
 
@@ -263,16 +280,29 @@ class Striker:
                 return 0.0, 0.0, 0.0
             self.state = ADJUST
         x, y = self.ball
+        self.note = f"ball x={x:.2f} y={y:.2f}"
         if x > STOP_DIST + 0.4 or abs(y) > 0.5 or x < 0.05 or self.nudges >= MAX_NUDGES:
+            self.note += f", lost the ball or too many nudges ({self.nudges})"
             self.state, self.no_kick_until = DRIBBLE, now + NO_KICK_TIME   # give up, dribble instead
             return 0.0, 0.0, 0.0
-        kick_dir = -ANGLE_PER_M * (y - STRAIGHT_Y)   # where the ball would go, robot frame
+        kick_dir = ANGLE_PER_M * (y - STRAIGHT_Y)   # where the ball would go, robot frame
         # directions from the ball to the left and right post, the kick must pass between
         on_target = posts[1] + POST_MARGIN < kick_dir < posts[0] - POST_MARGIN
+        self.note += f", kick direction {kick_dir:.2f} rad, goal {posts[1] + POST_MARGIN:.2f} to {posts[0] - POST_MARGIN:.2f}"
         if not KICK_Y[0] <= y <= KICK_Y[1] or not on_target:
-            # a turn on the spot leaves the feet uneven and the kick then misses or falls:
-            # only kick when the walk-up lined it up, otherwise keep dribbling
-            self.state, self.no_kick_until = DRIBBLE, now + NO_KICK_TIME
+            # turn on the spot (the kick squares the feet up first) if that brings the
+            # ball in front of the right foot and the kick inside the goal, else dribble
+            turn = self._aim_turn(x, y, posts)
+            if turn is None or self.turns >= MAX_TURNS:
+                self.note += f", needs y from {KICK_Y[0]} to {KICK_Y[1]} and the direction inside the goal"
+                self.state, self.no_kick_until = DRIBBLE, now + NO_KICK_TIME
+                return 0.0, 0.0, 0.0
+            self.note += ", turning " + ("left" if turn[1] > 0 else "right")
+            self.turned = True
+            self.state, self.nudge = NUDGE, turn
+            self.nudge_until = now + turn[2] + NUDGE_REST
+            self.turns += 1
+            self.nudges += 1
             return 0.0, 0.0, 0.0
         err = x - sum(KICK_X) / 2
         if x > KICK_X[1]:
@@ -280,10 +310,33 @@ class Striker:
                      FWD_MEDIUM if err > 0.04 else FWD_SMALL)
         elif x < KICK_X[0]:
             nudge = BACK
+        elif self.turned:
+            # a turn on the spot leaves the feet staggered and the kick then falls:
+            # a few steps straight square them up again
+            nudge = BACK if x < KICK_X[1] - 0.04 else FWD_SMALL
         else:
             self.state, self.kick_start, self.kick_request = KICK, now, True
             return 0.0, 0.0, 0.0
+        self.turned = False
         self.state, self.nudge = NUDGE, nudge
         self.nudge_until = now + nudge[2] + NUDGE_REST
         self.nudges += 1
         return 0.0, 0.0, 0.0
+
+    @staticmethod
+    def _kick_error(y, posts):
+        """How far the ball is from kickable: m outside the y zone + rad outside the goal."""
+        kick_dir = ANGLE_PER_M * (y - STRAIGHT_Y)
+        y_err = max(KICK_Y[0] - y, y - KICK_Y[1], 0.0)
+        aim_err = max(posts[1] + POST_MARGIN - kick_dir, kick_dir - (posts[0] - POST_MARGIN), 0.0)
+        return 3.0 * y_err + aim_err
+
+    def _aim_turn(self, x, y, posts):
+        """The turn nudge that brings the ball closest to kickable, or None if no turn helps."""
+        best, best_err = None, self._kick_error(y, posts) - 0.05
+        for nudge, a in ((TURN_LEFT, TURN), (TURN_RIGHT, -TURN)):
+            # the robot turns by a: the ball and the post directions turn by -a
+            err = self._kick_error(-math.sin(a) * x + math.cos(a) * y, [p - a for p in posts])
+            if err < best_err:
+                best, best_err = nudge, err
+        return best
