@@ -1,0 +1,66 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "../protos/K1.proto"
+
+WorldInfo {
+  basicTimeStep 2
+}
+Viewpoint {
+  orientation -0.2 0.2 0.96 1.6
+  position 0 -2.5 1.2
+  follow "K1"
+}
+TexturedBackground {}
+TexturedBackgroundLight {}
+RectangleArena {
+  floorSize 30 30
+}
+K1 {
+  translation 0 0 0.56
+  controller "k1_walk"
+  supervisor TRUE
+}
+DEF BALL Solid {
+  translation 1.5 0 0.11
+  children [
+    DEF BALL_SHAPE Shape {
+      appearance PBRAppearance {
+        roughness 0.4
+        metalness 0
+        baseColorMap ImageTexture {
+          url [ "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/textures/football_base_color.jpg" ]
+        }
+      }
+      geometry Sphere {
+        radius 0.11
+        subdivision 3
+      }
+    }
+  ]
+  name "ball"
+  boundingObject USE BALL_SHAPE
+  physics Physics {
+    density -1
+    mass 0.45
+    damping Damping {
+      linear 0.3
+      angular 0.3
+    }
+  }
+}
+DEF GOAL Solid {
+  translation 4.5 0 0
+  children [
+    DEF LEFT_POST Pose { translation 0 1.05 0.4 children [ Shape { appearance DEF GOAL_WHITE PBRAppearance { baseColor 1 1 1 roughness 0.5 metalness 0 } geometry Cylinder { height 0.8 radius 0.05 } } ] }
+    DEF RIGHT_POST Pose { translation 0 -1.05 0.4 children [ Shape { appearance USE GOAL_WHITE geometry Cylinder { height 0.8 radius 0.05 } } ] }
+    DEF CROSSBAR Pose { translation 0 0 0.8 rotation 1 0 0 1.5708 children [ Shape { appearance USE GOAL_WHITE geometry Cylinder { height 2.2 radius 0.05 } } ] }
+    DEF BACK_NET Pose { translation 0.6 0 0.25 children [ Shape { appearance DEF NET PBRAppearance { baseColor 0.6 0.6 0.6 roughness 1 metalness 0 } geometry Box { size 0.02 2.1 0.5 } } ] }
+    DEF LEFT_NET Pose { translation 0.3 1.05 0.25 children [ Shape { appearance USE NET geometry Box { size 0.6 0.02 0.5 } } ] }
+    DEF RIGHT_NET Pose { translation 0.3 -1.05 0.25 children [ Shape { appearance USE NET geometry Box { size 0.6 0.02 0.5 } } ] }
+  ]
+  name "goal"
+  boundingObject Group { children [ USE LEFT_POST USE RIGHT_POST USE BACK_NET USE LEFT_NET USE RIGHT_NET ] }
+}
