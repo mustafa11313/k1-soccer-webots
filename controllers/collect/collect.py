@@ -10,6 +10,9 @@ controllerArgs: split name, number of images, random seed, mode. Output goes to
 Mode "normal" (default) puts the ball 0.35-5 m away. Mode "close" looks steeply down
 and to the side with the arms in random poses, with the ball at the feet or (35%)
 no ball at all, so the detector learns close balls and that its own body is no ball.
+Mode "goal" (RoboCup field world) moves the robot in front of a goal every few images,
+looking at the goal net, with the ball in the goal, in front of it or (35%) not in view,
+so the detector learns that the black and white net is no ball.
 """
 import math
 import os
@@ -204,8 +207,41 @@ def randomize_normal():
     return x, y, head_yaw
 
 
+GOAL_X = 4.5        # m, goal lines of the kid-size field
+PER_PLACE = 6       # images per robot position in "goal" mode
+
+
+def place_robot():
+    """Goal mode: put the robot 0.5-3 m in front of a goal, roughly facing it."""
+    global obs_history, last_q, target
+    side = random.choice((1, -1))
+    x = side * (GOAL_X - random.uniform(0.5, 3.0))
+    y = random.uniform(-2.0, 2.0)
+    yaw = math.atan2(-y, side * GOAL_X - x) + random.uniform(-0.6, 0.6)
+    body.getField("translation").setSFVec3f([x, y, 0.56])
+    body.getField("rotation").setSFRotation([0, 0, 1, yaw])
+    body.resetPhysics()
+    obs_history, last_q, target = None, None, DEFAULT_POS.copy()
+    last_action[:] = 0
+    return side
+
+
+def randomize_goal():
+    head_yaw = random.uniform(-0.8, 0.8)
+    DEFAULT_POS[0] = head_yaw
+    DEFAULT_POS[1] = random.uniform(0.2, 0.79)
+    r = random.random()
+    if r < 0.35:  # only the goal and the field in view: negative example
+        x, y = random_floor_point(1.5, 4.0, head_yaw + math.pi, 0.5)
+    elif r < 0.6:  # ball in the goal, in front of the net
+        x, y = goal_side * (GOAL_X + random.uniform(0.15, 0.5)), random.uniform(-1.2, 1.2)
+    else:
+        x, y = random_floor_point(0.35, 3.5, head_yaw, 0.9)
+    return x, y, head_yaw
+
+
 def randomize():
-    x, y, head_yaw = randomize_close() if MODE == "close" else randomize_normal()
+    x, y, head_yaw = {"close": randomize_close, "goal": randomize_goal}.get(MODE, randomize_normal)()
     ball.getField("translation").setSFVec3f([x, y, BALL_RADIUS])
     ball.getField("rotation").setSFRotation([random.uniform(-1, 1), random.uniform(-1, 1), 1, random.uniform(0, 6.28)])
     ball.resetPhysics()
@@ -239,18 +275,26 @@ def ball_box():
 saved = 0
 step = 0
 next_randomize = 1.0  # let the robot settle first
+goal_side = place_robot() if MODE == "goal" else 1
+placed_at = 0
 while robot.step(dt_ms) != -1 and saved < COUNT:
     q, dq = read_joints()
     t = robot.getTime()
     if step % decimation == 0:
         gravity = policy_step(q, dq)  # zero command: the robot stands
         if gravity[2] > -0.5:
-            print("K1 fell over, stopping")
-            break
+            if MODE != "goal":
+                print("K1 fell over, stopping")
+                break
+            goal_side, placed_at = place_robot(), saved  # stand it up somewhere else
+            next_randomize, capture_at = t + 1.5, 1e9
     torque = np.clip(KP * (target + arm_offset - q) - KD * dq, -TORQUE_LIMIT, TORQUE_LIMIT)
     for m, tq in zip(motors, torque):
         m.setTorque(float(tq))
     step += 1
+    if MODE == "goal" and saved - placed_at >= PER_PLACE and t >= next_randomize:
+        goal_side, placed_at = place_robot(), saved
+        next_randomize, capture_at = t + 1.5, 1e9  # let it settle on its feet
     if t >= next_randomize:
         randomize()
         next_randomize = t + 0.3
