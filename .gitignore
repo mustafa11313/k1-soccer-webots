@@ -15,3 +15,6 @@ __pycache__/
 # other downloads (only booster_assets is part of the repository, as a submodule)
 /third_party/*
 !/third_party/booster_assets
+# Ultralytics base models (downloaded automatically) and local results
+/yolo11*.pt
+/results/
